@@ -1,0 +1,402 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "This template deploys the servers, a load balancer and the Udragram application",
+  "Parameters": {
+    "EnvironmentName": {
+      "Description": "An environment name that will be prefixed to resource names",
+      "Type": "String"
+    },
+    "KeyName": {
+      "Description": "Key pair to ssh into the running EC2 instances from the bastion host",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    },
+    "BasionHostKeyName": {
+      "Description": "Key pair to ssh into the running EC2 instances from the bastion host",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    },
+    "CidrLocalIp": {
+      "Description": "The CIDR block of my local IP address to access the bastion host",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    },
+    "InstanceType": {
+      "Description": "EC2 Instance Type of the four web servers",
+      "Type": "String",
+      "Default": "t2.medium",
+      "AllowedValues": [
+        "t2.medium",
+        "t2.large",
+        "t3a.medium",
+        "t3a.large",
+        "t3.medium",
+        "t3.large"
+      ]
+    },
+    "InstanceStorage": {
+      "Description": "Disk space to allocated to the EC2 instances",
+      "Type": "Number",
+      "Default": "10",
+      "MinValue": "10",
+      "MaxValue": "30"
+    }
+  },
+  "Resources": {
+    "BastionHostSecGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Allow SSH from local only. As for outbound, the bastion host is only allowed to SSH",
+        "VpcId": {
+          "Fn::ImportValue": {
+            "Fn::Sub": "${EnvironmentName}-VPCID"
+          }
+        },
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 22,
+            "ToPort": 22,
+            "CidrIp": {
+              "Ref": "CidrLocalIp"
+            }
+          }
+        ],
+        "SecurityGroupEgress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 22,
+            "ToPort": 22,
+            "CidrIp": "0.0.0.0/0"
+          }
+        ]
+      }
+    },
+    "BastionHost": {
+      "Type": "AWS::EC2::Instance",
+      "Properties": {
+        "ImageId": "ami-0ce21b51cb31a48b8",
+        "InstanceType": "t2.micro",
+        "KeyName": {
+          "Ref": "BasionHostKeyName"
+        },
+        "SecurityGroupIds": [
+          { "Fn::GetAtt": ["BastionHostSecGroup", "GroupId"] }
+        ],
+        "SubnetId": {
+          "Fn::ImportValue": {
+            "Fn::Sub": "${EnvironmentName}-PUB1-SN"
+          }
+        }
+      }
+    },
+    "WebServerSecGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Allow http to our hosts and SSH from the bastion host only. As for outbound, the hosts have unrestricted internet access",
+        "VpcId": {
+          "Fn::ImportValue": {
+            "Fn::Sub": "${EnvironmentName}-VPCID"
+          }
+        },
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 80,
+            "ToPort": 80,
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 22,
+            "ToPort": 22,
+            "CidrIp": {
+              "Fn::Join": [
+                "",
+                [{ "Fn::GetAtt": ["BastionHost", "PrivateIp"] }, "/32"]
+              ]
+            }
+          }
+        ],
+        "SecurityGroupEgress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 0,
+            "ToPort": 65535,
+            "CidrIp": "0.0.0.0/0"
+          }
+        ]
+      }
+    },
+    "LBSecGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Allow http to our load balancer and from the load balancer to the web servers",
+        "VpcId": {
+          "Fn::ImportValue": {
+            "Fn::Sub": "${EnvironmentName}-VPCID"
+          }
+        },
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 80,
+            "ToPort": 80,
+            "CidrIp": "0.0.0.0/0"
+          }
+        ],
+        "SecurityGroupEgress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 80,
+            "ToPort": 80,
+            "CidrIp": "0.0.0.0/0"
+          }
+        ]
+      }
+    },
+    "WebAppLaunchConfig": {
+      "Type": "AWS::AutoScaling::LaunchConfiguration",
+      "Properties": {
+        "UserData": {
+          "Fn::Base64": {
+            "Fn::Join": [
+              "",
+              [
+                "#!/bin/bash",
+                "\n",
+                "apt-get update -y",
+                "\n",
+                "apt-get install unzip awscli -y",
+                "\n",
+                "apt-get install apache2 -y",
+                "\n",
+                "systemctl start apache2.service",
+                "\n",
+                "cd /var/www/html",
+                "\n",
+                "aws s3 cp s3://udacity-demo-1/udacity.zip .",
+                "\n",
+                "unzip -o udacity.zip",
+                "\n"
+              ]
+            ]
+          }
+        },
+        "ImageId": "ami-0d1cd67c26f5fca19",
+        "KeyName": {
+          "Ref": "KeyName"
+        },
+        "SecurityGroups": [
+          {
+            "Ref": "WebServerSecGroup"
+          }
+        ],
+        "IamInstanceProfile": {
+          "Fn::ImportValue": {
+            "Fn::Sub": "${EnvironmentName}-InstanceProfile"
+          }
+        },
+        "InstanceType": {
+          "Ref": "InstanceType"
+        },
+        "BlockDeviceMappings": [
+          {
+            "DeviceName": "/dev/sdk",
+            "Ebs": {
+              "VolumeSize": "10"
+            }
+          }
+        ]
+      }
+    },
+    "WebAppTargetGroup": {
+      "Type": "AWS::ElasticLoadBalancingV2::TargetGroup",
+      "Properties": {
+        "HealthCheckIntervalSeconds": 10,
+        "HealthCheckPath": "/",
+        "HealthCheckProtocol": "HTTP",
+        "HealthCheckTimeoutSeconds": 8,
+        "HealthyThresholdCount": 2,
+        "Port": 80,
+        "Protocol": "HTTP",
+        "UnhealthyThresholdCount": 5,
+        "VpcId": {
+          "Fn::ImportValue": {
+            "Fn::Sub": "${EnvironmentName}-VPCID"
+          }
+        },
+        "TargetGroupAttributes": [
+          {
+            "Key": "slow_start.duration_seconds",
+            "Value": "30"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "${EnvironmentName} Target Group"
+            }
+          }
+        ]
+      }
+    },
+    "WebAppGroup": {
+      "Type": "AWS::AutoScaling::AutoScalingGroup",
+      "Properties": {
+        "VPCZoneIdentifier": [
+          {
+            "Fn::ImportValue": {
+              "Fn::Sub": "${EnvironmentName}-PRIV-NETS"
+            }
+          }
+        ],
+        "LaunchConfigurationName": {
+          "Ref": "WebAppLaunchConfig"
+        },
+        "MinSize": "4",
+        "MaxSize": "6",
+        "TargetGroupARNs": [
+          {
+            "Ref": "WebAppTargetGroup"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "PropagateAtLaunch": false,
+            "Value": {
+              "Fn::Sub": "${EnvironmentName} Auto Scaling Group"
+            }
+          }
+        ]
+      }
+    },
+    "WebAppLB": {
+      "Type": "AWS::ElasticLoadBalancingV2::LoadBalancer",
+      "Properties": {
+        "Subnets": [
+          {
+            "Fn::ImportValue": {
+              "Fn::Sub": "${EnvironmentName}-PUB1-SN"
+            }
+          },
+          {
+            "Fn::ImportValue": {
+              "Fn::Sub": "${EnvironmentName}-PUB2-SN"
+            }
+          }
+        ],
+        "SecurityGroups": [
+          {
+            "Ref": "LBSecGroup"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "${EnvironmentName} Load Balancer"
+            }
+          }
+        ]
+      }
+    },
+    "Listener": {
+      "Type": "AWS::ElasticLoadBalancingV2::Listener",
+      "Properties": {
+        "DefaultActions": [
+          {
+            "Type": "forward",
+            "TargetGroupArn": {
+              "Ref": "WebAppTargetGroup"
+            }
+          }
+        ],
+        "LoadBalancerArn": {
+          "Ref": "WebAppLB"
+        },
+        "Port": "80",
+        "Protocol": "HTTP"
+      }
+    },
+    "ALBListenerRule": {
+      "Type": "AWS::ElasticLoadBalancingV2::ListenerRule",
+      "Properties": {
+        "Actions": [
+          {
+            "Type": "forward",
+            "TargetGroupArn": {
+              "Ref": "WebAppTargetGroup"
+            }
+          }
+        ],
+        "Conditions": [
+          {
+            "Field": "path-pattern",
+            "Values": ["/"]
+          }
+        ],
+        "ListenerArn": {
+          "Ref": "Listener"
+        },
+        "Priority": 1
+      }
+    }
+  },
+  "Outputs": {
+    "PublicUrl": {
+      "Description": "The public url assigned to the load balancer, which is the single point of access for the end user",
+      "Value": {
+        "Fn::Join": ["", ["http://", { "Fn::GetAtt": ["WebAppLB", "DNSName"] }]]
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "${EnvironmentName}-PublicUrl"
+        }
+      }
+    },
+    "WebAppLaunchConfig": {
+      "Description": "A reference to the Launch Configuration that deploys the Udagram project to each server",
+      "Value": {
+        "Ref": "WebAppLaunchConfig"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "${EnvironmentName}-LaunchConfig"
+        }
+      }
+    },
+    "WebAppLoadBalancer": {
+      "Description": "A reference to the Load Balancer that distributes the load between the healthy servers",
+      "Value": {
+        "Ref": "WebAppLB"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "${EnvironmentName}-LoadBalancer"
+        }
+      }
+    },
+    "WebAppGroup": {
+      "Description": "A reference to the Auto Scaling Group",
+      "Value": {
+        "Ref": "WebAppGroup"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "${EnvironmentName}-AutoScalingGroup"
+        }
+      }
+    },
+    "WebAppTargetGroup": {
+      "Description": "A reference to the Target Group of available EC2 instances",
+      "Value": {
+        "Ref": "WebAppTargetGroup"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "${EnvironmentName}-TargetGroup"
+        }
+      }
+    }
+  }
+}

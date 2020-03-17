@@ -1,0 +1,26 @@
+[
+  {
+    "ParameterKey": "EnvironmentName",
+    "ParameterValue": "Udagram"
+  },
+  {
+    "ParameterKey": "KeyName",
+    "ParameterValue": "UdagramKeyName"
+  },
+  {
+    "ParameterKey": "BasionHostKeyName",
+    "ParameterValue": "UdagramBasionHostKeyName"
+  },
+  {
+    "ParameterKey": "CidrLocalIp",
+    "ParameterValue": "UdagramCidrLocalIp"
+  },
+  {
+    "ParameterKey": "InstanceType",
+    "ParameterValue": "t2.medium"
+  },
+  {
+    "ParameterKey": "InstanceStorage",
+    "ParameterValue": "10"
+  }
+]
